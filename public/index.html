@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#111827" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>Ovládání vysavače</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main class="app-container" aria-label="Ovládání vysavače">
+    
+    <!-- Persistent Giant Status Banner -->
+    <section 
+      id="status-banner" 
+      class="status-banner status-banner--loading" 
+      role="status" 
+      aria-live="polite" 
+      aria-atomic="true"
+    >
+      <div class="status-indicator" id="status-icon" aria-hidden="true">🟡</div>
+      <p class="status-text" id="status-text">Připojuji se k vysavači…</p>
+    </section>
+
+    <!-- Main Control Area (Zero Menus, 3 Giant Buttons) -->
+    <section class="controls" aria-label="Tlačítka pro ovládání">
+      
+      <!-- Giant Primary Button -->
+      <button 
+        id="btn-start" 
+        type="button" 
+        class="btn btn--primary"
+        aria-label="Začít vysávat"
+      >
+        <span class="btn__icon" aria-hidden="true">▶</span>
+        <span class="btn__label">Začít vysávat</span>
+      </button>
+
+      <!-- Two Secondary Buttons -->
+      <div class="secondary-controls">
+        <button 
+          id="btn-pause" 
+          type="button" 
+          class="btn btn--pause"
+          aria-label="Pozastavit vysávání"
+        >
+          <span class="btn__icon" aria-hidden="true">⏸</span>
+          <span class="btn__label">Pozastavit</span>
+        </button>
+
+        <button 
+          id="btn-dock" 
+          type="button" 
+          class="btn btn--dock"
+          aria-label="Poslat vysavač zpět do nabíjecí stanice"
+        >
+          <span class="btn__icon" aria-hidden="true">🏠</span>
+          <span class="btn__label">Zpět do stanice</span>
+        </button>
+      </div>
+
+    </section>
+  </main>
+
+  <script src="app.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,241 @@
+/* ==========================================================================
+   Senior-First High-Contrast Mobile UI (WCAG AAA)
+   ========================================================================== */
+
+:root {
+  --bg-page: #0f172a;
+  --text-light: #ffffff;
+  --text-dark: #0f172a;
+
+  /* Status Banner Palettes */
+  --banner-green-bg: #065f46;
+  --banner-green-border: #34d399;
+
+  --banner-yellow-bg: #fffbeb;
+  --banner-yellow-border: #f59e0b;
+  --banner-yellow-text: #78350f;
+
+  --banner-red-bg: #7f1d1d;
+  --banner-red-border: #f87171;
+
+  /* Action Button Palettes */
+  --btn-start-bg: #15803d;
+  --btn-start-border: #86efac;
+  --btn-start-active: #14532d;
+
+  --btn-pause-bg: #facc15;
+  --btn-pause-border: #fef08a;
+  --btn-pause-active: #eab308;
+
+  --btn-dock-bg: #1d4ed8;
+  --btn-dock-border: #93c5fd;
+  --btn-dock-active: #1e3a8a;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100dvh;
+  overflow: hidden;
+  background-color: var(--bg-page);
+  color: var(--text-light);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  touch-action: manipulation; /* Disables double-tap zoom delay */
+}
+
+.app-container {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  width: 100%;
+  height: 100dvh;
+  max-width: 600px;
+  margin: 0 auto;
+  padding: 16px;
+  gap: 16px;
+}
+
+/* ==========================================================================
+   Persistent Giant Status Banner
+   ========================================================================== */
+
+.status-banner {
+  flex: 0 0 auto;
+  min-height: 28dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 20px 18px;
+  border-radius: 20px;
+  border: 6px solid transparent;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
+  transition: background-color 0.25s ease, border-color 0.25s ease;
+}
+
+.status-indicator {
+  font-size: 2.8rem;
+  line-height: 1;
+  margin-bottom: 10px;
+}
+
+.status-text {
+  font-size: clamp(1.65rem, 6vw, 2.3rem);
+  font-weight: 800;
+  line-height: 1.25;
+  letter-spacing: 0.01em;
+}
+
+/* Status Color Variants */
+.status-banner--green {
+  background-color: var(--banner-green-bg);
+  border-color: var(--banner-green-border);
+  color: var(--text-light);
+}
+
+.status-banner--yellow,
+.status-banner--loading {
+  background-color: var(--banner-yellow-bg);
+  border-color: var(--banner-yellow-border);
+  color: var(--banner-yellow-text);
+}
+
+.status-banner--red {
+  background-color: var(--banner-red-bg);
+  border-color: var(--banner-red-border);
+  color: var(--text-light);
+  animation: alert-pulse 2s infinite ease-in-out;
+}
+
+@keyframes alert-pulse {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.015);
+  }
+}
+
+/* ==========================================================================
+   Massive Tactile Control Buttons
+   ========================================================================== */
+
+.controls {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.secondary-controls {
+  flex: 1 1 48%;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.btn {
+  width: 100%;
+  border-radius: 22px;
+  border: 5px solid transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 16px 20px;
+  cursor: pointer;
+  font-family: inherit;
+  font-weight: 900;
+  text-align: center;
+  box-shadow: 0 8px 0 rgba(0, 0, 0, 0.5);
+  transition: transform 0.1s ease, box-shadow 0.1s ease, filter 0.15s ease;
+}
+
+.btn:focus-visible {
+  outline: 6px solid #ffffff;
+  outline-offset: 4px;
+}
+
+.btn:active:not(:disabled) {
+  transform: translateY(6px);
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.5);
+}
+
+.btn:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
+/* Primary Button: Začít vysávat */
+.btn--primary {
+  flex: 1 1 52%;
+  background-color: var(--btn-start-bg);
+  border-color: var(--btn-start-border);
+  color: var(--text-light);
+  font-size: clamp(2rem, 7.5vw, 2.75rem);
+}
+
+.btn--primary:active:not(:disabled) {
+  background-color: var(--btn-start-active);
+}
+
+/* Secondary Button: Pozastavit */
+.btn--pause {
+  flex: 1 1 50%;
+  background-color: var(--btn-pause-bg);
+  border-color: var(--btn-pause-border);
+  color: var(--text-dark);
+  font-size: clamp(1.75rem, 6.5vw, 2.3rem);
+}
+
+.btn--pause:active:not(:disabled) {
+  background-color: var(--btn-pause-active);
+}
+
+/* Secondary Button: Zpět do stanice */
+.btn--dock {
+  flex: 1 1 50%;
+  background-color: var(--btn-dock-bg);
+  border-color: var(--btn-dock-border);
+  color: var(--text-light);
+  font-size: clamp(1.75rem, 6.5vw, 2.3rem);
+}
+
+.btn--dock:active:not(:disabled) {
+  background-color: var(--btn-dock-active);
+}
+
+/* Watchdog Recovery Highlight on "Zpět do stanice" */
+.btn--highlight-recovery {
+  border-color: #ffffff;
+  box-shadow: 0 0 0 6px #facc15, 0 8px 0 rgba(0, 0, 0, 0.5);
+  animation: dock-attention 1.4s infinite ease-in-out;
+}
+
+@keyframes dock-attention {
+  0%, 100% {
+    filter: brightness(1);
+  }
+  50% {
+    filter: brightness(1.25);
+  }
+}
+
+.btn__icon {
+  font-size: 1.15em;
+  line-height: 1;
+}
+
+.btn__label {
+  line-height: 1.15;
+}
