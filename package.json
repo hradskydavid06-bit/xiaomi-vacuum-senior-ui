@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "test": "node test.js",
+    "discover": "node discover-devices.js",
     "install:functions": "npm --prefix functions install",
     "deploy": "npx -y firebase-tools@latest deploy --only functions,hosting"
   }

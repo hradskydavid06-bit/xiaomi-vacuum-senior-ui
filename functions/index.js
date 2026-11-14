@@ -1,7 +1,13 @@
 /**
  * Firebase Cloud Function Backend for Xiaomi Vacuum Control via `node-mihome`
- * Supports both live Xiaomi Cloud API (`node-mihome`) and automatic stateful
- * miIO hardware simulation when credentials are not yet configured.
+ *
+ * Features:
+ * - Connects to Xiaomi Cloud API (`node-mihome`).
+ * - Supports BOTH classic Xiaomi/Roborock `miIO` (`get_status`, `app_start`, `app_pause`, `app_charge`)
+ *   and newer Xiaomi/Mijia/Dreame `MIoT-Spec` (`get_properties` / `action`) automatically.
+ * - Filters out non-critical maintenance warnings completely.
+ * - Translates hardware fault codes into reassuring, jargon-free Czech sentences.
+ * - Includes automatic stateful simulator fallback when credentials are not yet configured.
  */
 
 let onRequest;
@@ -34,6 +40,7 @@ try {
 
 // Reuse Xiaomi Cloud session across warm Cloud Function invocations
 let isAuthenticated = false;
+let detectedProtocol = null; // 'miio' | 'miot' | null
 
 /**
  * Built-in stateful Xiaomi miIO simulator used when MIHOME credentials are not set
@@ -71,8 +78,35 @@ async function ensureXiaomiLogin() {
 }
 
 /**
- * Executes a raw miIO command via Xiaomi Cloud API (`node-mihome`)
- * or against the stateful miIO simulator if credentials are not configured.
+ * Raw Xiaomi Cloud RPC call with automatic 1x re-login retry on token expiry.
+ */
+async function rawMiioCall(deviceId, method, params, country) {
+  await ensureXiaomiLogin();
+  try {
+    return await mihome.miCloudProtocol.miioCall(deviceId, method, params, { country });
+  } catch (err) {
+    isAuthenticated = false;
+    await ensureXiaomiLogin();
+    return await mihome.miCloudProtocol.miioCall(deviceId, method, params, { country });
+  }
+}
+
+/**
+ * Maps MIoT-Spec Vacuum Status (`siid: 2, piid: 1`) into standard miIO state numbers.
+ */
+const MIOT_STATUS_TO_MIIO = {
+  1: 5,  // Sweeping -> Cleaning
+  2: 2,  // Idle
+  3: 10, // Paused
+  4: 12, // Error
+  5: 6,  // Go Charging -> Returning
+  6: 8,  // Charging
+  7: 5,  // Mopping / Sweep & Mop -> Cleaning
+};
+
+/**
+ * Executes a vacuum method (`get_status`, `app_start`, `app_pause`, `app_charge`)
+ * with automatic fallback from classic `miIO` to `MIoT-Spec` for newer Xiaomi models.
  */
 async function callVacuumMethod(method, params = []) {
   if (isSimulationMode()) {
@@ -112,18 +146,75 @@ async function callVacuumMethod(method, params = []) {
     }
   }
 
-  const deviceId = process.env.MIHOME_DEVICE_ID;
+  const deviceId = String(process.env.MIHOME_DEVICE_ID);
   const country = process.env.MIHOME_COUNTRY || 'de';
+  const configuredProtocol = (process.env.MIHOME_PROTOCOL || detectedProtocol || 'auto').toLowerCase();
 
-  await ensureXiaomiLogin();
+  // Try classic miIO unless explicitly configured or already detected as MIoT
+  if (configuredProtocol !== 'miot') {
+    try {
+      const res = await rawMiioCall(deviceId, method, params, country);
+      detectedProtocol = 'miio';
+      return res;
+    } catch (err) {
+      if (configuredProtocol === 'miio') {
+        throw err;
+      }
+      // Fall through to MIoT-Spec protocol
+      detectedProtocol = 'miot';
+    }
+  }
 
-  try {
-    return await mihome.miCloudProtocol.miioCall(deviceId, method, params, { country });
-  } catch (err) {
-    // Re-authenticate once if Xiaomi Cloud token expired
-    isAuthenticated = false;
-    await ensureXiaomiLogin();
-    return await mihome.miCloudProtocol.miioCall(deviceId, method, params, { country });
+  // MIoT-Spec protocol handling for newer Xiaomi / Mijia / Dreame vacuums
+  switch (method) {
+    case 'app_start':
+      return await rawMiioCall(
+        deviceId,
+        'action',
+        { did: deviceId, siid: 2, aiid: 1, in: [] },
+        country
+      );
+
+    case 'app_pause':
+      return await rawMiioCall(
+        deviceId,
+        'action',
+        { did: deviceId, siid: 2, aiid: 2, in: [] },
+        country
+      );
+
+    case 'app_charge':
+      return await rawMiioCall(
+        deviceId,
+        'action',
+        { did: deviceId, siid: 3, aiid: 1, in: [] },
+        country
+      );
+
+    case 'get_status':
+    default: {
+      const props = await rawMiioCall(
+        deviceId,
+        'get_properties',
+        [
+          { did: deviceId, siid: 2, piid: 1 }, // Status
+          { did: deviceId, siid: 2, piid: 2 }, // Fault
+        ],
+        country
+      );
+      const statusProp = Array.isArray(props) ? props.find((p) => p.piid === 1) : null;
+      const faultProp = Array.isArray(props) ? props.find((p) => p.piid === 2) : null;
+
+      const miotStatus = Number(statusProp?.value ?? 6);
+      const miotFault = Number(faultProp?.value ?? 0);
+
+      return [
+        {
+          state: MIOT_STATUS_TO_MIIO[miotStatus] ?? 8,
+          error_code: miotFault,
+        },
+      ];
+    }
   }
 }
 
