@@ -12,7 +12,7 @@ An accessible, high-contrast, Czech-only mobile web application and Firebase Clo
    - Tactile depression states and mobile haptic feedback (`navigator.vibrate`) on button presses.
 
 2. **Reassuring Czech Error Translation & Maintenance Filtering (`functions/index.js`)**:
-   - Connects to the Xiaomi Cloud API via `node-mihome`.
+   - Connects to the Xiaomi Cloud API via `node-mihome` (and automatically falls back to a stateful Xiaomi miIO simulator if credentials are not yet configured).
    - Translates hardware fault codes (e.g., tangled main brush, missing dustbin, cliff sensor) into calm, jargon-free Czech sentences.
    - **Suppresses non-critical maintenance warnings** (filter life, sensor wipe timers, brush wear counters) so the senior is never alarmed by routine maintenance reminders.
 
@@ -29,7 +29,9 @@ An accessible, high-contrast, Czech-only mobile web application and Firebase Clo
 ```text
 xiaomi-vacuum-senior-ui/
 ├── firebase.json            # Firebase Hosting + Cloud Function rewrite config
-├── .gitignore
+├── package.json             # Root scripts (`npm start`, `npm test`, `npm run deploy`)
+├── server.js                # Local standalone HTTP server + API router
+├── test.js                  # Automated verification suite
 ├── public/                  # Mobile-first frontend web app
 │   ├── index.html           # Semantic Czech UI (zero menus, 3 giant buttons)
 │   ├── style.css            # WCAG AAA high-contrast styling
@@ -42,17 +44,20 @@ xiaomi-vacuum-senior-ui/
 
 ---
 
-## Setup & Deployment Guide
+## Quick Start (Run Locally)
 
-### 1. Install Dependencies
 ```bash
-npm install -g firebase-tools
-cd functions
-npm install
-cd ..
+npm run install:functions
+npm test
+npm start
 ```
+Then open `http://localhost:3000`.
 
-### 2. Configure Xiaomi Cloud Credentials
+---
+
+## Configure Real Xiaomi Cloud Credentials & Deploy to Firebase
+
+### 1. Configure Xiaomi Cloud Credentials
 Copy `functions/.env.example` to `functions/.env` and fill in your Xiaomi Cloud credentials and numeric device ID:
 ```bash
 cp functions/.env.example functions/.env
@@ -64,9 +69,9 @@ MIHOME_DEVICE_ID="123456789"
 MIHOME_COUNTRY="de"
 ```
 
-### 3. Link Firebase Project & Deploy
+### 2. Link Firebase Project & Deploy
 ```bash
-firebase login
-firebase use --add
-firebase deploy --only functions,hosting
+npx -y firebase-tools@latest login
+npx -y firebase-tools@latest use --add
+npm run deploy
 ```

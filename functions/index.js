@@ -1,13 +1,61 @@
 /**
  * Firebase Cloud Function Backend for Xiaomi Vacuum Control via `node-mihome`
+ * Supports both live Xiaomi Cloud API (`node-mihome`) and automatic stateful
+ * miIO hardware simulation when credentials are not yet configured.
  */
 
-const { onRequest } = require('firebase-functions/v2/https');
-const cors = require('cors')({ origin: true });
-const mihome = require('node-mihome');
+let onRequest;
+try {
+  ({ onRequest } = require('firebase-functions/v2/https'));
+} catch (_) {
+  onRequest = (_opts, handler) => handler;
+}
+
+let cors;
+try {
+  cors = require('cors')({ origin: true });
+} catch (_) {
+  cors = (_req, res, next) => {
+    if (typeof res.setHeader === 'function') {
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    }
+    return next();
+  };
+}
+
+let mihome;
+try {
+  mihome = require('node-mihome');
+} catch (_) {
+  mihome = null;
+}
 
 // Reuse Xiaomi Cloud session across warm Cloud Function invocations
 let isAuthenticated = false;
+
+/**
+ * Built-in stateful Xiaomi miIO simulator used when MIHOME credentials are not set
+ * (or when SIMULATION_MODE=true), allowing full local & staging execution.
+ */
+const simulatedVacuum = {
+  state: 8, // 8 = Charging in dock
+  error_code: 0,
+  battery: 100,
+  dockingTimer: null,
+};
+
+function isSimulationMode() {
+  if (process.env.SIMULATION_MODE === 'true') return true;
+  if (!mihome) return true;
+  const user = process.env.MIHOME_USERNAME;
+  const pass = process.env.MIHOME_PASSWORD;
+  const did = process.env.MIHOME_DEVICE_ID;
+  if (!user || !pass || !did) return true;
+  if (user === 'your-xiaomi-email@example.com' || did === '123456789') return true;
+  return false;
+}
 
 /**
  * Authenticates with Xiaomi Cloud API using `node-mihome`.
@@ -18,25 +66,54 @@ async function ensureXiaomiLogin() {
   const username = process.env.MIHOME_USERNAME;
   const password = process.env.MIHOME_PASSWORD;
 
-  if (!username || !password) {
-    throw new Error('Missing MIHOME_USERNAME or MIHOME_PASSWORD environment variables.');
-  }
-
   await mihome.miCloudProtocol.login(username, password);
   isAuthenticated = true;
 }
 
 /**
- * Executes a raw miIO command via Xiaomi Cloud API (`node-mihome`).
- * Retries once on session expiration.
+ * Executes a raw miIO command via Xiaomi Cloud API (`node-mihome`)
+ * or against the stateful miIO simulator if credentials are not configured.
  */
 async function callVacuumMethod(method, params = []) {
+  if (isSimulationMode()) {
+    if (simulatedVacuum.dockingTimer && method !== 'get_status') {
+      clearTimeout(simulatedVacuum.dockingTimer);
+      simulatedVacuum.dockingTimer = null;
+    }
+
+    switch (method) {
+      case 'app_start':
+        simulatedVacuum.error_code = 0;
+        simulatedVacuum.state = 5; // Cleaning
+        return ['ok'];
+
+      case 'app_pause':
+        simulatedVacuum.state = 10; // Paused
+        return ['ok'];
+
+      case 'app_charge':
+        simulatedVacuum.error_code = 0;
+        simulatedVacuum.state = 6; // Returning to dock
+        simulatedVacuum.dockingTimer = setTimeout(() => {
+          simulatedVacuum.state = 8; // Charging
+          simulatedVacuum.dockingTimer = null;
+        }, 4000);
+        return ['ok'];
+
+      case 'get_status':
+      default:
+        return [
+          {
+            state: simulatedVacuum.state,
+            error_code: simulatedVacuum.error_code,
+            battery: simulatedVacuum.battery,
+          },
+        ];
+    }
+  }
+
   const deviceId = process.env.MIHOME_DEVICE_ID;
   const country = process.env.MIHOME_COUNTRY || 'de';
-
-  if (!deviceId) {
-    throw new Error('Missing MIHOME_DEVICE_ID environment variable.');
-  }
 
   await ensureXiaomiLogin();
 
@@ -152,53 +229,76 @@ async function fetchFormattedStatus() {
     hasError: isCriticalError,
     errorCode: isCriticalError ? rawErrorCode : 0,
     errorMessage,
+    simulationMode: isSimulationMode(),
   };
+}
+
+/**
+ * Shared HTTP handler used by both Firebase Cloud Functions and the local Node server.
+ */
+async function handleVacuumRequest(req, res) {
+  try {
+    const action = (req.method === 'GET' ? req.query?.action : req.body?.action) || 'status';
+
+    switch (action) {
+      case 'start':
+        await callVacuumMethod('app_start', []);
+        break;
+
+      case 'pause':
+        await callVacuumMethod('app_pause', []);
+        break;
+
+      case 'dock':
+        try {
+          await callVacuumMethod('app_pause', []);
+        } catch (_) {
+          // Ignore if already paused/stopped
+        }
+        await callVacuumMethod('app_charge', []);
+        break;
+
+      case 'simulate':
+        // Allows testing fault translation, maintenance filtering & Watchdog intervention
+        if (isSimulationMode()) {
+          if (simulatedVacuum.dockingTimer) {
+            clearTimeout(simulatedVacuum.dockingTimer);
+            simulatedVacuum.dockingTimer = null;
+          }
+          if (req.body?.rawState !== undefined) {
+            simulatedVacuum.state = Number(req.body.rawState);
+          }
+          if (req.body?.rawErrorCode !== undefined) {
+            simulatedVacuum.error_code = Number(req.body.rawErrorCode);
+          }
+        }
+        break;
+
+      case 'status':
+      default:
+        break;
+    }
+
+    const statusPayload = await fetchFormattedStatus();
+    return res.status(200).json(statusPayload);
+  } catch (error) {
+    console.error('Xiaomi Cloud API Error:', error);
+    return res.status(502).json({
+      state: 'error',
+      statusText: 'Nelze se spojit s vysavačem. Zkuste to prosím za chvíli.',
+      statusColor: 'red',
+      hasError: true,
+      errorCode: -1,
+      errorMessage: 'Nelze se spojit s vysavačem. Zkuste to prosím za chvíli.',
+    });
+  }
 }
 
 /**
  * Main HTTPS Cloud Function (`vacuum`)
  */
 exports.vacuum = onRequest({ region: 'europe-west1', cors: true }, (req, res) => {
-  cors(req, res, async () => {
-    try {
-      const action = (req.method === 'GET' ? req.query.action : req.body?.action) || 'status';
-
-      switch (action) {
-        case 'start':
-          await callVacuumMethod('app_start', []);
-          break;
-
-        case 'pause':
-          await callVacuumMethod('app_pause', []);
-          break;
-
-        case 'dock':
-          // First pause/stop any active cleaning or stuck state, then command return to dock
-          try {
-            await callVacuumMethod('app_pause', []);
-          } catch (_) {
-            // Ignore if already paused/stopped
-          }
-          await callVacuumMethod('app_charge', []);
-          break;
-
-        case 'status':
-        default:
-          break;
-      }
-
-      const statusPayload = await fetchFormattedStatus();
-      return res.status(200).json(statusPayload);
-    } catch (error) {
-      console.error('Xiaomi Cloud API Error:', error);
-      return res.status(502).json({
-        state: 'error',
-        statusText: 'Nelze se spojit s vysavačem. Zkuste to prosím za chvíli.',
-        statusColor: 'red',
-        hasError: true,
-        errorCode: -1,
-        errorMessage: 'Nelze se spojit s vysavačem. Zkuste to prosím za chvíli.',
-      });
-    }
-  });
+  cors(req, res, () => handleVacuumRequest(req, res));
 });
+
+exports.handleVacuumRequest = handleVacuumRequest;

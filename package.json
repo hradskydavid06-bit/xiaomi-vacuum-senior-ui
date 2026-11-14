@@ -1,0 +1,12 @@
+{
+  "name": "xiaomi-vacuum-senior-ui",
+  "version": "1.0.0",
+  "description": "Accessible Czech Xiaomi smart vacuum controller for seniors (Frontend + Firebase Cloud Function)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test.js",
+    "install:functions": "npm --prefix functions install",
+    "deploy": "npx -y firebase-tools@latest deploy --only functions,hosting"
+  }
+}
