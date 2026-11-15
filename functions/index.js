@@ -295,17 +295,17 @@ async function fetchFormattedStatus() {
     text: 'Připraven',
   };
 
-  // Ignore non-critical maintenance warnings completely
+  // Ignore non-critical maintenance & dock reminders (such as X20+ station code 68),
+  // and never show a "stopped" error while the vacuum is peacefully docked/charging.
   const isCriticalError =
     rawErrorCode !== 0 &&
     !IGNORED_MAINTENANCE_CODES.has(rawErrorCode) &&
-    rawErrorCode < 200;
+    Boolean(CRITICAL_ERROR_MAP_CS[rawErrorCode]) &&
+    mappedState.state !== 'charging';
 
   let errorMessage = null;
   if (isCriticalError) {
-    errorMessage =
-      CRITICAL_ERROR_MAP_CS[rawErrorCode] ||
-      'Vysavač se zastavil. Zkontrolujte, zda mu nic nepřekáží, a klikněte na „Zpět do stanice“.';
+    errorMessage = CRITICAL_ERROR_MAP_CS[rawErrorCode];
   }
 
   return {

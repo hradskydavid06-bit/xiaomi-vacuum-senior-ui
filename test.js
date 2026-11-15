@@ -61,17 +61,17 @@ async function runTests() {
   assert.strictEqual(pauseRes.data.statusText, 'Pozastaveno');
   console.log('✓ Test 3 Passed: Pause transitions to "🟡 Pozastaveno"');
 
-  // 4. Non-critical maintenance warning (Code 200 = Filter worn, Code 15 = Dirty wall sensor)
+  // 4. Non-critical maintenance warning (Code 200 = Filter worn, Code 68 = X20+ dock reminder)
   const maintRes = await callHandler('POST', {}, {
     action: 'simulate',
-    rawState: 5,
-    rawErrorCode: 200,
+    rawState: 8,
+    rawErrorCode: 68,
   });
   assert.strictEqual(maintRes.data.hasError, false);
   assert.strictEqual(maintRes.data.errorCode, 0);
-  assert.strictEqual(maintRes.data.state, 'cleaning');
-  assert.strictEqual(maintRes.data.statusColor, 'green');
-  console.log('✓ Test 4 Passed: Non-critical maintenance warning (code 200) is completely ignored');
+  assert.strictEqual(maintRes.data.state, 'charging');
+  assert.strictEqual(maintRes.data.statusColor, 'yellow');
+  console.log('✓ Test 4 Passed: Non-critical dock/maintenance warning (code 68 while docked) is completely ignored');
 
   // 5. Critical Hardware Error (Code 5 = Main brush tangled)
   const errRes = await callHandler('POST', {}, {
