@@ -1,7 +1,6 @@
 /**
- * Standalone Local Server (`npm start`)
- * Serves the static frontend (`public/`) and mounts the Firebase Cloud Function
- * (`functions/index.js`) at `/api/vacuum` so the full stack works out of the box.
+ * Universal HTTP Server & Vercel Node Preset Handler
+ * Serves both static frontend (`public/`) and `/api/vacuum` in local and serverless environments.
  */
 
 const http = require('http');
@@ -9,7 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const url = require('url');
 
-// Load `functions/.env` if present
+// Load `functions/.env` if present locally
 const envPath = path.join(__dirname, 'functions', '.env');
 if (fs.existsSync(envPath)) {
   const envContent = fs.readFileSync(envPath, 'utf8');
@@ -27,7 +26,6 @@ if (fs.existsSync(envPath)) {
   }
 }
 
-// Ensure module resolution finds packages installed inside `functions/node_modules`
 module.paths.push(path.join(__dirname, 'functions', 'node_modules'));
 
 const { handleVacuumRequest } = require('./functions/index.js');
@@ -45,39 +43,55 @@ const MIME_TYPES = {
   '.ico': 'image/x-icon',
 };
 
-const server = http.createServer((req, res) => {
+function requestListener(req, res) {
   const parsedUrl = url.parse(req.url, true);
   const pathname = parsedUrl.pathname;
 
-  // Route API requests to the Cloud Function handler
-  if (pathname === '/api/vacuum') {
+  // Route API requests to the Vacuum Cloud Function handler
+  if (pathname === '/api/vacuum' || pathname === '/api/vacuum.js') {
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204, {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type',
+      });
+      res.end();
+      return;
+    }
+
+    const expressLikeRes = {
+      statusCode: 200,
+      status(code) {
+        this.statusCode = code;
+        return this;
+      },
+      json(payload) {
+        res.writeHead(this.statusCode, {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Cache-Control': 'no-store',
+          'Access-Control-Allow-Origin': '*',
+        });
+        res.end(JSON.stringify(payload));
+      },
+    };
+
+    req.query = req.query || parsedUrl.query || {};
+
+    if (req.body !== undefined) {
+      handleVacuumRequest(req, expressLikeRes);
+      return;
+    }
+
     let rawBody = '';
     req.on('data', (chunk) => {
       rawBody += chunk;
     });
     req.on('end', async () => {
-      req.query = parsedUrl.query || {};
       try {
         req.body = rawBody ? JSON.parse(rawBody) : {};
       } catch (_) {
         req.body = {};
       }
-
-      const expressLikeRes = {
-        statusCode: 200,
-        status(code) {
-          this.statusCode = code;
-          return this;
-        },
-        json(payload) {
-          res.writeHead(this.statusCode, {
-            'Content-Type': 'application/json; charset=utf-8',
-            'Cache-Control': 'no-store',
-          });
-          res.end(JSON.stringify(payload));
-        },
-      };
-
       await handleVacuumRequest(req, expressLikeRes);
     });
     return;
@@ -106,8 +120,15 @@ const server = http.createServer((req, res) => {
     });
     res.end(content);
   });
-});
+}
 
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`Xiaomi Vacuum Senior UI running at http://localhost:${PORT}`);
-});
+// Start standalone HTTP server when run directly (`node server.js`),
+// and export handler for Vercel's Node preset
+if (require.main === module) {
+  const server = http.createServer(requestListener);
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log(`Xiaomi Vacuum Senior UI running at http://localhost:${PORT}`);
+  });
+}
+
+module.exports = requestListener;

@@ -1,8 +1,1 @@
-{
-  "framework": null,
-  "buildCommand": "",
-  "outputDirectory": "public",
-  "rewrites": [
-    { "source": "/api/vacuum", "destination": "/api/vacuum" }
-  ]
-}
+{}

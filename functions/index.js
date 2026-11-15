@@ -1,7 +1,7 @@
 /**
- * Firebase Cloud Function Backend for Xiaomi Vacuum Control via `node-mihome`
+ * Backend Controller for Xiaomi Vacuum Control (Firebase Cloud Functions, Vercel, & Local Server)
  *
- * Tailored & verified for Xiaomi Robot Vacuum X20+ (`xiaomi.vacuum.c102gl`, MIoT-Spec)
+ * Tailored & verified for Xiaomi Robot Vacuum X20+ (`xiaomi.vacuum.c102gl`, MIoT-Spec, did: 1172182642)
  * as well as classic Xiaomi / Roborock `miIO` models.
  */
 
@@ -26,22 +26,17 @@ try {
   };
 }
 
-const xiaomiCloudFallback = require('./xiaomi-cloud.js');
-let mihome;
-try {
-  mihome = require('node-mihome');
-} catch (_) {
-  mihome = xiaomiCloudFallback;
-}
+const {
+  miCloudProtocol: xiaomiClient,
+  DEFAULT_X20_SESSION,
+  cleanEnv,
+} = require('./xiaomi-cloud.js');
 
-// Reuse Xiaomi Cloud session across warm Cloud Function invocations
+// Reuse Xiaomi Cloud session across warm Serverless Function invocations
 let isAuthenticated = false;
-let activeCloudClient = null;
-let detectedProtocol = null; // 'miio' | 'miot' | null
 
 /**
- * Built-in stateful Xiaomi simulator used when MIHOME credentials are not set
- * (or when SIMULATION_MODE=true), allowing safe unit testing without moving the physical robot.
+ * Built-in stateful Xiaomi simulator used ONLY when SIMULATION_MODE=true (e.g. unit tests).
  */
 const simulatedVacuum = {
   state: 8, // 8 = Charging in dock
@@ -51,53 +46,33 @@ const simulatedVacuum = {
 };
 
 function isSimulationMode() {
-  if (process.env.SIMULATION_MODE === 'true') return true;
-  const user = process.env.MIHOME_USERNAME;
-  const pass = process.env.MIHOME_PASSWORD;
-  const did = process.env.MIHOME_DEVICE_ID;
-  if (!user || !pass || !did) return true;
-  if (user === 'your-xiaomi-email@example.com' || did === '123456789') return true;
-  return false;
+  return cleanEnv(process.env.SIMULATION_MODE) === 'true';
 }
 
 /**
- * Authenticates with Xiaomi Cloud API using cached 2FA tokens (`xiaomi-cloud.js`) or `node-mihome`.
+ * Authenticates with Xiaomi Cloud API using pre-verified X20+ session tokens.
  */
 async function ensureXiaomiLogin() {
-  if (isAuthenticated && activeCloudClient) return;
-
-  const username = process.env.MIHOME_USERNAME;
-  const password = process.env.MIHOME_PASSWORD;
-
-  if (process.env.MIHOME_SSECURITY && process.env.MIHOME_SERVICE_TOKEN) {
-    await xiaomiCloudFallback.miCloudProtocol.login(username, password);
-    activeCloudClient = xiaomiCloudFallback.miCloudProtocol;
-    isAuthenticated = true;
-    return;
-  }
-
-  try {
-    await mihome.miCloudProtocol.login(username, password);
-    activeCloudClient = mihome.miCloudProtocol;
-    isAuthenticated = true;
-  } catch (_) {
-    await xiaomiCloudFallback.miCloudProtocol.login(username, password);
-    activeCloudClient = xiaomiCloudFallback.miCloudProtocol;
-    isAuthenticated = true;
-  }
+  if (isAuthenticated) return;
+  await xiaomiClient.login(
+    cleanEnv(process.env.MIHOME_USERNAME),
+    cleanEnv(process.env.MIHOME_PASSWORD)
+  );
+  isAuthenticated = true;
 }
 
 /**
- * Raw Xiaomi Cloud RPC call with automatic 1x re-login retry on token expiry.
+ * Raw Xiaomi Cloud RPC call with automatic retry on token expiry.
  */
 async function rawMiioCall(deviceId, method, params, country) {
   await ensureXiaomiLogin();
   try {
-    return await activeCloudClient.miioCall(deviceId, method, params, { country });
+    return await xiaomiClient.miioCall(deviceId, method, params, { country });
   } catch (err) {
     isAuthenticated = false;
-    await ensureXiaomiLogin();
-    return await activeCloudClient.miioCall(deviceId, method, params, { country });
+    await xiaomiClient.refreshFromPassToken();
+    isAuthenticated = true;
+    return await xiaomiClient.miioCall(deviceId, method, params, { country });
   }
 }
 
@@ -150,9 +125,6 @@ const MIIO_STATE_MAP = {
 
 /**
  * NON-CRITICAL MAINTENANCE WARNINGS TO IGNORE COMPLETELY:
- * Xiaomi firmware sometimes reports codes for dirty sensors (15)
- * or filter/brush wear reminders (200+). We ignore non-blocking maintenance reminders
- * so the senior is only alerted when physical intervention is truly needed.
  */
 const IGNORED_MAINTENANCE_CODES = new Set([
   0,   // No error
@@ -232,9 +204,11 @@ async function callVacuumMethod(method, params = []) {
     }
   }
 
-  const deviceId = String(process.env.MIHOME_DEVICE_ID);
-  const country = process.env.MIHOME_COUNTRY || 'de';
-  const configuredProtocol = (process.env.MIHOME_PROTOCOL || detectedProtocol || 'miot').toLowerCase();
+  const rawEnvDid = cleanEnv(process.env.MIHOME_DEVICE_ID);
+  const deviceId =
+    rawEnvDid && rawEnvDid !== '123456789' ? rawEnvDid : DEFAULT_X20_SESSION.deviceId;
+  const country = cleanEnv(process.env.MIHOME_COUNTRY, DEFAULT_X20_SESSION.country);
+  const configuredProtocol = cleanEnv(process.env.MIHOME_PROTOCOL, 'miot').toLowerCase();
 
   if (configuredProtocol === 'miio') {
     const res = await rawMiioCall(deviceId, method, params, country);
@@ -280,9 +254,15 @@ async function callVacuumMethod(method, params = []) {
         ],
         country
       );
-      const statusProp = Array.isArray(props) ? props.find((p) => p.siid === 2 && p.piid === 1) : null;
-      const faultProp = Array.isArray(props) ? props.find((p) => p.siid === 2 && p.piid === 2) : null;
-      const batteryProp = Array.isArray(props) ? props.find((p) => p.siid === 3 && p.piid === 1) : null;
+      const statusProp = Array.isArray(props)
+        ? props.find((p) => p.siid === 2 && p.piid === 1)
+        : null;
+      const faultProp = Array.isArray(props)
+        ? props.find((p) => p.siid === 2 && p.piid === 2)
+        : null;
+      const batteryProp = Array.isArray(props)
+        ? props.find((p) => p.siid === 3 && p.piid === 1)
+        : null;
 
       return [
         {
@@ -342,11 +322,20 @@ async function fetchFormattedStatus() {
 }
 
 /**
- * Shared HTTP handler used by both Firebase Cloud Functions and the local Node server.
+ * Shared HTTP handler used by Firebase Cloud Functions, Vercel, and the local Node server.
  */
 async function handleVacuumRequest(req, res) {
   try {
-    const action = (req.method === 'GET' ? req.query?.action : req.body?.action) || 'status';
+    let bodyObj = req.body;
+    if (typeof bodyObj === 'string' && bodyObj.trim().length > 0) {
+      try {
+        bodyObj = JSON.parse(bodyObj);
+      } catch (_) {
+        bodyObj = {};
+      }
+    }
+
+    const action = (req.method === 'GET' ? req.query?.action : bodyObj?.action) || 'status';
 
     switch (action) {
       case 'start':
@@ -372,11 +361,11 @@ async function handleVacuumRequest(req, res) {
             clearTimeout(simulatedVacuum.dockingTimer);
             simulatedVacuum.dockingTimer = null;
           }
-          if (req.body?.rawState !== undefined) {
-            simulatedVacuum.state = Number(req.body.rawState);
+          if (bodyObj?.rawState !== undefined) {
+            simulatedVacuum.state = Number(bodyObj.rawState);
           }
-          if (req.body?.rawErrorCode !== undefined) {
-            simulatedVacuum.error_code = Number(req.body.rawErrorCode);
+          if (bodyObj?.rawErrorCode !== undefined) {
+            simulatedVacuum.error_code = Number(bodyObj.rawErrorCode);
           }
         }
         break;
@@ -397,6 +386,7 @@ async function handleVacuumRequest(req, res) {
       hasError: true,
       errorCode: -1,
       errorMessage: 'Nelze se spojit s vysavačem. Zkuste to prosím za chvíli.',
+      debugReason: error.message || String(error),
     });
   }
 }

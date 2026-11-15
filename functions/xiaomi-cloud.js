@@ -1,9 +1,28 @@
 /**
  * Pure Node.js Zero-Dependency Xiaomi Cloud Client (`miCloudProtocol` compatible)
- * Implements Xiaomi Account authentication and signed requests to `api.io.mi.com`.
+ * Implements Xiaomi Account authentication, 2FA token persistence, passToken auto-refresh,
+ * and signed requests to `de.api.io.mi.com`.
  */
 
 const crypto = require('crypto');
+
+function cleanEnv(val, fallback = '') {
+  if (!val) return fallback;
+  return String(val).trim().replace(/^["']|["']$/g, '').trim();
+}
+
+// Pre-verified session configuration for Xiaomi Robot Vacuum X20+ (did: 1172182642)
+const DEFAULT_X20_SESSION = {
+  userId: '8303841440',
+  deviceId: '1172182642',
+  country: 'de',
+  clientDeviceId: 'XIAOMIVACUUMCZ01',
+  ssecurity: 'Gte9otaxepl7G5KWVVN22w==',
+  serviceToken:
+    'unxrtpNcmYy3B5LSm6ZyV2lhididYvknBPw33TCQfdfjwxIBlp2tHhfCnOjX5UoH8ElEDJHIRAC5Aol+eRWukhMvo6CA54oR/0cPCt44+U5xmBKOn5iFGhUFfD10xwZHJ54qkz5YnpI0EsVI4h84zVQ8c7tEZuPoYZGx/2oCe8bx8n1UCK0QLhXKORB2JaTPS0pMVHo7xoXrhaMzgzl7DA==',
+  passToken:
+    'V1:9d2wTZnSKA8D7PcQtwbCZBARst1ZodphQbPCqndObq1l666rUXN0WsmtcLGZ95PCNqIiNsSj6wNjT/VTyk25oM8C6rIwXWSiXo0pZwn7wgEMa2JamFYEBt+FkK19m6itBOfoLjeLepLjuyAwoebTm/WF3fv0Fr/+0vsRcJDsR8xePBnXFqmPQTtYcnUu8RNmXfkIPGXWhPycIeytZgIJl7U48BeevPvwPeC43ULFfDT1/WqImT+nbjTWBpuE7t+Wvdwe+gI4ARCEbYgbqZ5ThquB6F2JZfDu2l/jjUutCnCIMdNpKo673KepSc/ALC4gbi/g4BbzG52jQtEci5QoCA==',
+};
 
 class XiaomiCloudClient {
   constructor() {
@@ -13,12 +32,11 @@ class XiaomiCloudClient {
     this.cUserId = null;
     this.passToken = null;
     this.isLoggedIn = false;
-    this.agentId = crypto.randomBytes(8).toString('hex').toUpperCase();
-    this.deviceId = crypto.randomBytes(6).toString('hex');
+    this.deviceId = DEFAULT_X20_SESSION.clientDeviceId;
   }
 
   get userAgent() {
-    return `Android-7.1.1-1.0.0-ONEPLUS A3010-136-${this.agentId} APP/xiaomi.smarthome APPV/62830`;
+    return `Android-7.1.1-1.0.0-ONEPLUS A3010-136-${this.deviceId} APP/xiaomi.smarthome APPV/62830`;
   }
 
   static stripPrefix(text) {
@@ -58,42 +76,112 @@ class XiaomiCloudClient {
       .digest('base64');
   }
 
+  /**
+   * Refreshes `ssecurity` and `serviceToken` using the trusted `passToken` + `userId`
+   * without requiring password or 2FA verification.
+   */
+  async refreshFromPassToken() {
+    const userId = this.userId || cleanEnv(process.env.MIHOME_USER_ID, DEFAULT_X20_SESSION.userId);
+    const passToken =
+      this.passToken || cleanEnv(process.env.MIHOME_PASS_TOKEN, DEFAULT_X20_SESSION.passToken);
+
+    if (!userId || !passToken) {
+      throw new Error('Missing userId or passToken for session refresh.');
+    }
+
+    const cookieHeader = `sdkVersion=accountsdk-18.8.15; deviceId=${this.deviceId}; userId=${userId}; passToken=${passToken}`;
+    const rLogin = await fetch('https://account.xiaomi.com/pass/serviceLogin?sid=xiaomiio&_json=true', {
+      method: 'GET',
+      headers: {
+        'User-Agent': this.userAgent,
+        Cookie: cookieHeader,
+      },
+    });
+
+    const jLogin = JSON.parse(XiaomiCloudClient.stripPrefix(await rLogin.text()));
+    if (!jLogin.ssecurity || !jLogin.location) {
+      throw new Error(`passToken refresh failed (code ${jLogin.code})`);
+    }
+
+    const rSts = await fetch(jLogin.location, {
+      method: 'GET',
+      redirect: 'manual',
+      headers: {
+        'User-Agent': this.userAgent,
+      },
+    });
+
+    const rawCookies =
+      typeof rSts.headers.getSetCookie === 'function'
+        ? rSts.headers.getSetCookie()
+        : [rSts.headers.get('set-cookie') || ''];
+
+    let newServiceToken = null;
+    for (const cookieStr of rawCookies) {
+      const match = cookieStr.match(/serviceToken=([^;]+)/);
+      if (match) {
+        newServiceToken = match[1];
+        break;
+      }
+    }
+
+    if (!newServiceToken) {
+      throw new Error('Failed to extract refreshed serviceToken cookie.');
+    }
+
+    this.userId = String(jLogin.userId || userId);
+    this.ssecurity = jLogin.ssecurity;
+    this.serviceToken = newServiceToken;
+    this.passToken = jLogin.passToken || passToken;
+    this.isLoggedIn = true;
+  }
+
   async login(username, password) {
-    // Use pre-verified permanent session tokens if present in environment
-    if (
-      process.env.MIHOME_USER_ID &&
-      process.env.MIHOME_SSECURITY &&
-      process.env.MIHOME_SERVICE_TOKEN
-    ) {
-      this.userId = process.env.MIHOME_USER_ID;
-      this.ssecurity = process.env.MIHOME_SSECURITY;
-      this.serviceToken = process.env.MIHOME_SERVICE_TOKEN;
-      this.passToken = process.env.MIHOME_PASS_TOKEN || null;
+    const userId = cleanEnv(process.env.MIHOME_USER_ID, DEFAULT_X20_SESSION.userId);
+    const ssecurity = cleanEnv(process.env.MIHOME_SSECURITY, DEFAULT_X20_SESSION.ssecurity);
+    const serviceToken = cleanEnv(
+      process.env.MIHOME_SERVICE_TOKEN,
+      DEFAULT_X20_SESSION.serviceToken
+    );
+    const passToken = cleanEnv(process.env.MIHOME_PASS_TOKEN, DEFAULT_X20_SESSION.passToken);
+
+    if (userId && ssecurity && serviceToken) {
+      this.userId = userId;
+      this.ssecurity = ssecurity;
+      this.serviceToken = serviceToken;
+      this.passToken = passToken;
       this.isLoggedIn = true;
       return;
     }
 
-    // Step 1: Fetch _sign token
+    if (userId && passToken) {
+      await this.refreshFromPassToken();
+      return;
+    }
+
+    // Standard username/password login fallback
+    const cleanUser = cleanEnv(username);
+    const cleanPass = cleanEnv(password);
+
     const step1Url = 'https://account.xiaomi.com/pass/serviceLogin?sid=xiaomiio&_json=true';
     const step1Res = await fetch(step1Url, {
       method: 'GET',
       headers: {
         'User-Agent': this.userAgent,
-        Cookie: `sdkVersion=accountsdk-18.8.15; deviceId=${this.deviceId}; userId=${username}`,
+        Cookie: `sdkVersion=accountsdk-18.8.15; deviceId=${this.deviceId}; userId=${cleanUser}`,
       },
     });
     const step1Text = XiaomiCloudClient.stripPrefix(await step1Res.text());
     const step1Json = JSON.parse(step1Text);
     const sign = step1Json._sign;
 
-    // Step 2: Authenticate with MD5 password hash
-    const hash = crypto.createHash('md5').update(password).digest('hex').toUpperCase();
+    const hash = crypto.createHash('md5').update(cleanPass).digest('hex').toUpperCase();
     const form = new URLSearchParams({
       sid: 'xiaomiio',
       hash,
       callback: 'https://sts.api.io.mi.com/sts',
       qs: '%3Fsid%3Dxiaomiio%26_json%3Dtrue',
-      user: username,
+      user: cleanUser,
       _sign: sign,
       _json: 'true',
     });
@@ -103,7 +191,7 @@ class XiaomiCloudClient {
       headers: {
         'User-Agent': this.userAgent,
         'Content-Type': 'application/x-www-form-urlencoded',
-        Cookie: `sdkVersion=accountsdk-18.8.15; deviceId=${this.deviceId}; userId=${username}`,
+        Cookie: `sdkVersion=accountsdk-18.8.15; deviceId=${this.deviceId}; userId=${cleanUser}`,
       },
       body: form.toString(),
     });
@@ -111,15 +199,9 @@ class XiaomiCloudClient {
     const step2Text = XiaomiCloudClient.stripPrefix(await step2Res.text());
     const step2Json = JSON.parse(step2Text);
 
-    if (step2Json.notificationUrl) {
-      throw new Error(
-        `Xiaomi Account requires 2FA verification. Open or verify in Xiaomi account: ${step2Json.notificationUrl}`
-      );
-    }
-
     if (!step2Json.ssecurity || !step2Json.location) {
       throw new Error(
-        `Xiaomi login failed (code ${step2Json.code}): ${step2Json.desc || step2Json.description || 'Invalid credentials'}`
+        `Xiaomi login failed (code ${step2Json.code}): ${step2Json.desc || step2Json.description || '2FA or invalid credentials'}`
       );
     }
 
@@ -128,7 +210,6 @@ class XiaomiCloudClient {
     this.cUserId = step2Json.cUserId;
     this.passToken = step2Json.passToken;
 
-    // Step 3: Follow STS callback location to obtain serviceToken cookie
     const step3Res = await fetch(step2Json.location, {
       method: 'GET',
       redirect: 'manual',
@@ -158,17 +239,13 @@ class XiaomiCloudClient {
   }
 
   getApiBaseUrl(country = 'de') {
-    const region = (country || 'de').toLowerCase();
+    const region = cleanEnv(country, 'de').toLowerCase();
     return region === 'cn'
       ? 'https://api.io.mi.com/app'
       : `https://${region}.api.io.mi.com/app`;
   }
 
-  async request(urlPath, dataObj, country = 'de') {
-    if (!this.isLoggedIn) {
-      throw new Error('Not logged into Xiaomi Cloud.');
-    }
-
+  async executeSignedPost(urlPath, dataObj, country = 'de') {
     const nonce = XiaomiCloudClient.generateNonce();
     const signedNonceStr = this.signedNonce(nonce);
     const params = {
@@ -183,7 +260,7 @@ class XiaomiCloudClient {
     });
 
     const fullUrl = `${this.getApiBaseUrl(country)}${urlPath}`;
-    const res = await fetch(fullUrl, {
+    return await fetch(fullUrl, {
       method: 'POST',
       headers: {
         'User-Agent': this.userAgent,
@@ -202,6 +279,20 @@ class XiaomiCloudClient {
       },
       body: form.toString(),
     });
+  }
+
+  async request(urlPath, dataObj, country = 'de') {
+    if (!this.isLoggedIn) {
+      await this.login();
+    }
+
+    let res = await this.executeSignedPost(urlPath, dataObj, country);
+
+    // If serviceToken expired or was rejected on a new serverless IP, refresh via passToken and retry
+    if (res.status === 401 || res.status === 403) {
+      await this.refreshFromPassToken();
+      res = await this.executeSignedPost(urlPath, dataObj, country);
+    }
 
     if (!res.ok) {
       throw new Error(`Xiaomi Cloud HTTP ${res.status}`);
@@ -241,4 +332,6 @@ class XiaomiCloudClient {
 module.exports = {
   miCloudProtocol: new XiaomiCloudClient(),
   XiaomiCloudClient,
+  DEFAULT_X20_SESSION,
+  cleanEnv,
 };
