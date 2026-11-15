@@ -1,7 +1,8 @@
 {
-  "version": 2,
+  "framework": null,
+  "buildCommand": "",
+  "outputDirectory": "public",
   "rewrites": [
-    { "source": "/api/vacuum", "destination": "/api/vacuum.js" },
-    { "source": "/(.*)", "destination": "/public/$1" }
+    { "source": "/api/vacuum", "destination": "/api/vacuum" }
   ]
 }
