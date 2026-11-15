@@ -8,6 +8,9 @@
 const assert = require('assert');
 const path = require('path');
 
+// Always run unit tests against the simulator so we never start the physical vacuum during tests
+process.env.SIMULATION_MODE = 'true';
+
 module.paths.push(path.join(__dirname, 'functions', 'node_modules'));
 
 const { handleVacuumRequest } = require('./functions/index.js');

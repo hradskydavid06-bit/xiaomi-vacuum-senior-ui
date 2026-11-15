@@ -1,8 +1,8 @@
 /**
  * Xiaomi Cloud Vacuum Discovery Helper (`npm run discover`)
  * Logs into Xiaomi Cloud with MIHOME_USERNAME and MIHOME_PASSWORD,
- * scans regions ('de', 'us', 'cn', 'sg', 'ru'), and prints your vacuum's
- * exact MIHOME_DEVICE_ID (`did`), model, and online status.
+ * scans regions ('de', 'cn', 'us', 'sg', 'ru'), prints your vacuum's
+ * exact MIHOME_DEVICE_ID (`did`), model, and online status, and updates `functions/.env`.
  */
 
 const path = require('path');
@@ -37,12 +37,27 @@ async function discover() {
     process.exit(1);
   }
 
-  const mihome = require('node-mihome');
+  let mihome;
+  try {
+    mihome = require('node-mihome');
+  } catch (_) {
+    mihome = require('./functions/xiaomi-cloud.js');
+  }
+
   console.log(`Logging in to Xiaomi Cloud as ${username}...`);
-  await mihome.miCloudProtocol.login(username, password);
+  try {
+    await mihome.miCloudProtocol.login(username, password);
+  } catch (err) {
+    console.log(`Primary login encountered: ${err.message}. Trying built-in XiaomiCloudClient...`);
+    mihome = require('./functions/xiaomi-cloud.js');
+    await mihome.miCloudProtocol.login(username, password);
+  }
   console.log('✓ Logged in successfully!\n');
 
   const regions = ['de', 'cn', 'us', 'sg', 'ru'];
+  let selectedDevice = null;
+  let selectedCountry = 'de';
+
   for (const country of regions) {
     try {
       const devices = await mihome.miCloudProtocol.getDevices(null, { country });
@@ -50,15 +65,43 @@ async function discover() {
         console.log(`=== Region: "${country}" (${devices.length} device(s)) ===`);
         for (const dev of devices) {
           console.log(`  • Name:      ${dev.name}`);
-          console.log(`    Device ID: ${dev.did}   <-- Use this as MIHOME_DEVICE_ID`);
+          console.log(`    Device ID: ${dev.did}`);
           console.log(`    Model:     ${dev.model}`);
           console.log(`    Online:    ${dev.isOnline}`);
           console.log('');
+
+          const isVacuum =
+            String(dev.model || '').toLowerCase().includes('vacuum') ||
+            String(dev.name || '').toLowerCase().includes('vacuum') ||
+            String(dev.name || '').toLowerCase().includes('vysava');
+
+          if (!selectedDevice || (isVacuum && dev.isOnline)) {
+            selectedDevice = dev;
+            selectedCountry = country;
+          }
         }
       }
     } catch (err) {
-      // Ignore region errors
+      console.log(`Region "${country}" check error: ${err.message}`);
     }
+  }
+
+  if (selectedDevice) {
+    console.log(`Selected Vacuum: ${selectedDevice.name} (did=${selectedDevice.did}, model=${selectedDevice.model}, country=${selectedCountry})`);
+    const newEnv = [
+      '# Xiaomi Cloud Account Credentials',
+      `MIHOME_USERNAME="${username}"`,
+      `MIHOME_PASSWORD="${password}"`,
+      '',
+      `# Discovered Vacuum: ${selectedDevice.name} (${selectedDevice.model})`,
+      `MIHOME_DEVICE_ID="${selectedDevice.did}"`,
+      `MIHOME_COUNTRY="${selectedCountry}"`,
+      '',
+    ].join('\n');
+    fs.writeFileSync(envPath, newEnv, 'utf8');
+    console.log('✓ Updated functions/.env with the discovered Device ID and Region!');
+  } else {
+    console.log('No devices found across scanned Xiaomi Cloud regions.');
   }
 }
 
